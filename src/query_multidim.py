@@ -222,12 +222,6 @@ class MultidimQuery(Query):
 
     ##################################################
 
-    def to_dot_graph(self) -> None:
-        """
-            Generates a file in which the discovery process graph is painted.
-        """
-        print("Not implemented yet.")
-
     ##################################################
 
     def __eq__(self, other_query:Self) -> bool:

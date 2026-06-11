@@ -193,12 +193,6 @@ class Query:
 
     ##################################################
 
-    def to_dot_graph(self) -> None:
-        """
-            Generates a file in which the discovery process graph is painted.
-        """
-        print("Not implemented yet.")
-
     ##################################################
 
     def __eq__(self, other_query:Self) -> bool:
@@ -400,99 +394,6 @@ class Query:
 
     ##################################################
 
-    def match_sample_finditer(self, sample:Sample|None, supp:float, trace_index:list, complete_test:bool=False) -> dict|None:
-        """
-            Checks whether the query matches a given sample with given support.
-
-            Determines and sets the support of the query regarding the sample
-            if a full test is performed. Stores indices of tested traces
-            depending on the match test result in _query_matched_traces or
-            _query_not_matched_traces and returns matching behavior as well as
-            matching positions.
-
-            Args:
-                sample: Sample instance.
-
-                supp: Float between 0 and 1 which describes the requested
-                    support.
-
-                trace_index: list of trace indeces of the Sample.
-
-                complete_test: Boolean which indicates whether all traces
-                    should be tested or not. In the latter case the loop over
-                    traces will stop if either the support is fulfilled or can
-                    not be fulfilled anymore.
-
-            Returns:
-                A dictionary containing the traces as keys and their matching
-                objects or None as values.
-
-            Raises:
-                EmptySampleError: The given sample is empty.
-                InvalidQuerySupportError: Supp is <0 or >1.
-        """
-        LOGGER.debug('match_sample - Started')
-        assert isinstance(sample, Sample)
-        assert isinstance(supp, float)
-
-        if supp < 0 or supp > 1:
-            raise InvalidQuerySupportError(f'Support {supp} has to be between 0 and 1.')
-
-        sample.set_sample_size()
-        trace_count = sample._sample_size
-        match_count = 0
-        test_count = 0
-        dictionary = dict()
-
-        # Preprocessing:
-        if self._query_matchtest == 'regex':
-            if self._query_is_in_normalform is False and len(self._query_windowsize_local) > 0 and len(self._query_gap_constraints)==0 and self._query_windowsize_global == -1:
-                LOGGER.debug('match_sample_finditer - preprocessing - regex - Use function query_string_to_normalform')
-                self.query_string_to_normalform()
-            if not self._query_string_regex:
-                LOGGER.debug('match_sample_finditer - preprocessing - regex - Use function query_string_to_regex')
-                self.query_string_to_regex()
-            LOGGER.debug('match_sample_finditer - preprocessing - regex - Compile _query_string_regex')
-        if not self._query_string_regex:
-            self.query_string_to_regex()
-        regex = re.compile(self._query_string_regex)
-
-        if trace_count == 0:
-            raise EmptySampleError('The given sample is empty.')
-        for trace, idx in zip(sample._sample, trace_index):
-            LOGGER.debug('match_sample - Current trace: %s', trace)
-            witness = None
-            if self._query_matchtest == 'finditer':
-                LOGGER.debug('match_sample - Use function match_trace_regex')
-                witness = self.match_trace_regex(trace, regex)
-            #witnesses=list(witness)
-            if witness is not None:
-                LOGGER.debug('match_sample - Match of trace %s was successfull', trace)
-                match_count = match_count+1
-                #dictionary[trace]=witnesses
-                #Index of current trace is stored in _query_matched_traces
-                self._query_matched_traces.append(test_count)
-            else:
-                #Index of current trace is stored in _query_not_matched_traces
-                self._query_not_matched_traces.append(test_count)
-            dictionary[idx]=witness
-            #Check whether we have to continue or not
-            #if complete_test is False and ((match_count+(trace_count-test_count) / trace_count < supp)
-            #    or (match_count/trace_count >= supp)):
-            #    break
-        sample_support = match_count/trace_count
-        # The query sample support is set if a complete test was executed
-        if complete_test is True or trace_count==test_count:
-            self.set_query_sample_support(sample_support)
-        LOGGER.debug('match_sample - Requested sample support: %s', str(supp))
-        LOGGER.debug('match_sample - Sample support of query:  %s', str(sample_support))
-        if sample_support >= supp:
-            LOGGER.debug('match_sample - Finished with True')
-            return dictionary
-        LOGGER.debug('match_sample - Finished with False')
-        return dictionary
-
-    
     def matching_smarter(self, sample, supp, dict_iter, patternset,parent_dict):
         """Matches a query against all traces in the sample
 

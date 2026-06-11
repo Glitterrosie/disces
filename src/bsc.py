@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Contains functions for discovering queries from samples by using variants of pattern-type-split (BU) algorithm."""
+"""B-S-C: Bottom-up Separated Constant discovery algorithm."""
 import logging
 import time
 from math import ceil
@@ -7,7 +7,7 @@ from copy import deepcopy
 import numpy as np
 from query_multidim import MultidimQuery
 from error import EmptySampleError, InvalidQuerySupportError
-from discovery import combine_all, merge_event_arrays
+from discovery_shared import combine_all, merge_event_arrays
 from sample_multidim import MultidimSample
 from hyper_linked_tree import HyperLinkedTree, Vertex
 
@@ -206,7 +206,30 @@ def discovery_bu_pts_multidim(sample:MultidimSample, supp:float, use_tree_struct
         result_dict['query_tree'] = mixed_query_tree
     MAX_QUERY_LENGTH = float('inf')
 
-    return (descriptive_mixed_queries,stats, result_dict)
+    return (descriptive_mixed_queries, stats, result_dict)
+
+
+def discover_bsc(sample: MultidimSample, supp: float, max_query_length: int = -1,
+                 find_descriptive_only: bool = True, all_patternset=None) -> dict:
+    """B-S-C: pattern-type-split bottom-up discovery. Public entry point.
+
+    Returns the result_dict (third element of the internal tuple).
+    """
+    _, _, result_dict = discovery_bu_pts_multidim(
+        sample=sample,
+        supp=supp,
+        use_smart_matching=True,
+        discovery_order='type_first',
+        use_tree_structure=True,
+        max_query_length=max_query_length,
+        find_descriptive_only=find_descriptive_only,
+        all_patternset=all_patternset,
+    )
+    # The tree root (empty string) leaks into the queryset when no queries are
+    # found; filter it out to stay consistent with the other algorithms.
+    result_dict['queryset'] = result_dict.get('queryset', set()) - {''}
+    return result_dict
+
 
 def _search_type_multidim(sample:MultidimSample, given_pat:str, given_event:list, mutation_index:int, s_n_next_event:dict, s_n_same_event:dict, supp:float,
         already_existing_tree:HyperLinkedTree|None=None, current_vertex:Vertex=None, param_smart_matching:tuple | None=None) -> set:
