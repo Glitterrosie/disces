@@ -568,6 +568,39 @@ class HyperLinkedTree:
         if not frequent_items_only:
             return set(self._vertices.keys())
         return {string for (string,vertex) in self._vertices.items() if vertex.is_frequent(self._supp)}
+    
+    def add_subtree_to_vertex(self, existing_vertex, subtree):
+        """
+            Adds a whole subtree to an existing vertex. The root of the subtree will be added as child to the existing vertex and all vertices of the subtree will be added to the hyperlinked tree.
+
+            Args:
+                existing_vertex: the vertex to which the subtree will be connected to.
+
+                subtree: the subtree to be added to the hyperlinked tree.
+
+        """
+
+        # add as a child
+        subtree_root_vertex = subtree.get_root()
+
+        existing_vertex.child_vertices.add(subtree_root_vertex)
+
+        # append to vertex dictionary
+        subtree_vertex_dict = subtree._vertices
+        for query_string, vertex in subtree_vertex_dict.items():
+            if query_string == "":
+                continue
+            if query_string in self._vertices:
+                self.collision_counter += 1
+                raise NameError("Query '%s' already exists", query_string)
+            self._vertices[query_string] = vertex
+
+        # adapt parent vertices of the subtree root vertex
+        # parent_vertices_set = self.find_parent_vertices(subtree_root_vertex)
+        # if parent_vertices_set:
+        #     subtree_root_vertex.parent_vertices = parent_vertices_set
+        #     if subtree_root_vertex._bool_found_all_parents is None:
+        #         subtree_root_vertex._bool_found_all_parents = True
 
     def __str__(self):
         """

@@ -103,7 +103,6 @@ def discover_duc_smartest(sample, supp, max_query_length, only_types=False, find
     parent_dict[querystring] = query
 
     children = _next_queries_multidim(query,alphabet, max_query_length, patternset)
-    parent_dict.update({child._query_string: query for child in children})
     grand_children = []
     non_descriptive = set()
     
@@ -119,6 +118,7 @@ def discover_duc_smartest(sample, supp, max_query_length, only_types=False, find
         temp_stack.append(child)
         stack_collection.append(temp_stack)
 
+
     futures = [_process_query.remote(stack, querycount, last_print_time, sample, supp, dict_iter, all_patternset, patternset, matching_dict, non_matching_dict, non_descriptive, query_tree, parent_dict, alphabet, max_query_length, gen_event, dictionary) for stack in stack_collection]
     results = ray.get(futures)
     #pprint.pprint(results)
@@ -128,7 +128,20 @@ def discover_duc_smartest(sample, supp, max_query_length, only_types=False, find
     for dict in results:
         result_query_tree = dict['query_tree']
         #query_tree.insert_query_string(existing_vertex=query_tree.get_root(), query_array=result_query_tree.query_strings_to_list(), query_string= result_query_tree.query_strings_to_list()[-1],query=query, search_for_parents=False)
-        print(result_query_tree.query_strings_to_list())
+        #print(result_query_tree.query_strings_to_list())
+        query_tree.add_subtree_to_vertex(query_tree.get_root(), result_query_tree)
+
+        print(matching_dict)
+        result_matching_dict = dict['matching_dict']
+        for query_string, query in matching_dict.items():
+            matching_dict[query_string] = query
+
+    
+    print(query_tree.query_strings_to_list())
+    #print(matching_dict)
+
+    #['', '$x0; $x0;', '$x0; $x0; $x0;', '$x0; $x0; $x1; $x1;', '$x0; $x1; $x0; $x1;', '$x0; $x1; $x1; $x0;']
+    #['', 'aa;']
 
     #     return {
     #     'stack': stack,
@@ -169,6 +182,11 @@ def discover_duc_smartest(sample, supp, max_query_length, only_types=False, find
 def _process_query(stack, querycount, last_print_time, sample, supp, dict_iter, all_patternset, patternset,
                    matching_dict, non_matching_dict, non_descriptive, query_tree, parent_dict, alphabet,
                    max_query_length, gen_event, dictionary):
+
+    first_query = stack[-1]
+    query = MultidimQuery()
+    parent_dict[first_query._query_string] = query
+    
     while stack:
         query = stack.pop()
         querystring = query._query_string
