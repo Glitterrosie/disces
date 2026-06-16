@@ -7,3 +7,5 @@ seaborn
 func_timeout
 jinja2
 typing_extensions
+
+ray

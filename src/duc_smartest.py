@@ -92,53 +92,42 @@ def discover_duc_smartest(sample, supp, max_query_length, only_types=False, find
     query.set_query_string(gen_event)
     querystring= query._query_string
     matching_dict[querystring] = query
-
-    stack_collection = []
-    stack= deque()
-    #stack_collection.append(stack)
     dict_iter = {}
     matching = True
     querycount=1
     dictionary= {}
-    parent_dict[querystring] = query
 
     children = _next_queries_multidim(query,alphabet, max_query_length, patternset)
+
+    parent_dict.update({child._query_string: query for child in children})
     grand_children = []
     non_descriptive = set()
-    
-    stack.extend(children)
-    query_tree = HyperLinkedTree(ceil(supp*sample._sample_size), event_dimension=sample._sample_event_dimension)
-    #print(query_tree.query_strings_to_list())
-    
+
     start_time = time.time()
     last_print_time = start_time
 
+    thread_collection = []
+
     for child in children:
-        temp_stack = deque()
-        temp_stack.append(child)
-        stack_collection.append(temp_stack)
+        stack = deque()
+        query_tree = HyperLinkedTree(ceil(supp * sample._sample_size), event_dimension=sample._sample_event_dimension)
+        parent_dict = {}
+
+        parent_dict[querystring] = query
+        parent_dict[child._query_string] = query
+        stack.append(child)
+        thread_collection.append((stack,query_tree,parent_dict))
 
 
-    futures = [_process_query.remote(stack, querycount, last_print_time, sample, supp, dict_iter, all_patternset, patternset, matching_dict, non_matching_dict, non_descriptive, query_tree, parent_dict, alphabet, max_query_length, gen_event, dictionary) for stack in stack_collection]
+    futures = [_process_query.remote(stack, 1, sample, supp, dict_iter, all_patternset, patternset, matching_dict, non_matching_dict, non_descriptive, query_tree, parent_dict, alphabet, max_query_length, gen_event, dictionary) for stack,query_tree,parent_dict in thread_collection]
     results = ray.get(futures)
-    #pprint.pprint(results)
-    #print(results)
-
-    # query tree
+    #_process_query(thread_collection[0][0],1,sample,supp,dict_iter,all_patternset,patternset, matching_dict, non_matching_dict, non_descriptive, thread_collection[0][1], thread_collection[0][2], alphabet, max_query_length, gen_event, dictionary)
     for dict in results:
         result_query_tree = dict['query_tree']
-        #query_tree.insert_query_string(existing_vertex=query_tree.get_root(), query_array=result_query_tree.query_strings_to_list(), query_string= result_query_tree.query_strings_to_list()[-1],query=query, search_for_parents=False)
-        #print(result_query_tree.query_strings_to_list())
-        query_tree.add_subtree_to_vertex(query_tree.get_root(), result_query_tree)
-
-        print(matching_dict)
         result_matching_dict = dict['matching_dict']
-        for query_string, query in matching_dict.items():
+        query_tree.add_subtree_to_vertex(query_tree.get_root(), result_query_tree)
+        for query_string, query in result_matching_dict.items():
             matching_dict[query_string] = query
-
-    
-    print(query_tree.query_strings_to_list())
-    #print(matching_dict)
 
     #['', '$x0; $x0;', '$x0; $x0; $x0;', '$x0; $x0; $x1; $x1;', '$x0; $x1; $x0; $x1;', '$x0; $x1; $x1; $x0;']
     #['', 'aa;']
@@ -146,7 +135,6 @@ def discover_duc_smartest(sample, supp, max_query_length, only_types=False, find
     #     return {
     #     'stack': stack,
     #     'querycount': querycount,
-    #     'last_print_time': last_print_time,
     #     'matching_dict': matching_dict,
     #     'non_matching_dict': non_matching_dict,
     #     'non_descriptive': non_descriptive,
@@ -179,23 +167,15 @@ def discover_duc_smartest(sample, supp, max_query_length, only_types=False, find
 
 
 @ray.remote
-def _process_query(stack, querycount, last_print_time, sample, supp, dict_iter, all_patternset, patternset,
+def _process_query(stack, querycount, sample, supp, dict_iter, all_patternset, patternset,
                    matching_dict, non_matching_dict, non_descriptive, query_tree, parent_dict, alphabet,
                    max_query_length, gen_event, dictionary):
-
-    first_query = stack[-1]
-    query = MultidimQuery()
-    parent_dict[first_query._query_string] = query
-    
     while stack:
         query = stack.pop()
         querystring = query._query_string
         query.set_query_matchtest('smarter')
         querycount += 1
         current_time = time.time()
-        if current_time - last_print_time > 300:
-            LOGGER.info('Current query: %s; current stack size: %i; Current Query count: %i', querystring, len(stack), querycount)
-            last_print_time = current_time
         parent = parent_dict[querystring]
         parentstring = parent._query_string
         matching = query.match_sample(sample=sample, supp=supp, dict_iter=dict_iter, patternset=all_patternset, parent_dict=parent_dict)
@@ -221,14 +201,8 @@ def _process_query(stack, querycount, last_print_time, sample, supp, dict_iter, 
                 parent_dict.update({child._query_string: query for child in children})
 
     return {
-        'stack': stack,
-        'querycount': querycount,
-        'last_print_time': last_print_time,
         'matching_dict': matching_dict,
-        'non_matching_dict': non_matching_dict,
-        'non_descriptive': non_descriptive,
         'query_tree': query_tree,
         'parent_dict': parent_dict,
-        'dict_iter': dict_iter,
-        'dictionary': dictionary,
+        'querycount': querycount,
     }
