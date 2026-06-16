@@ -93,18 +93,12 @@ def discover_duc_smartest(sample, supp, max_query_length, only_types=False, find
     querystring= query._query_string
     matching_dict[querystring] = query
     dict_iter = {}
-    matching = True
-    querycount=1
     dictionary= {}
 
     children = _next_queries_multidim(query,alphabet, max_query_length, patternset)
 
     parent_dict.update({child._query_string: query for child in children})
-    grand_children = []
     non_descriptive = set()
-
-    start_time = time.time()
-    last_print_time = start_time
 
     thread_collection = []
 
@@ -121,30 +115,18 @@ def discover_duc_smartest(sample, supp, max_query_length, only_types=False, find
 
     futures = [_process_query.remote(stack, 1, sample, supp, dict_iter, all_patternset, patternset, matching_dict, non_matching_dict, non_descriptive, query_tree, parent_dict, alphabet, max_query_length, gen_event, dictionary) for stack,query_tree,parent_dict in thread_collection]
     results = ray.get(futures)
-    #_process_query(thread_collection[0][0],1,sample,supp,dict_iter,all_patternset,patternset, matching_dict, non_matching_dict, non_descriptive, thread_collection[0][1], thread_collection[0][2], alphabet, max_query_length, gen_event, dictionary)
+    query_tree = HyperLinkedTree(ceil(supp * sample._sample_size), event_dimension=sample._sample_event_dimension)
+    querycount = 0
     for dict in results:
         result_query_tree = dict['query_tree']
         result_matching_dict = dict['matching_dict']
+        result_querycount = dict['querycount']
+
         query_tree.add_subtree_to_vertex(query_tree.get_root(), result_query_tree)
         for query_string, query in result_matching_dict.items():
             matching_dict[query_string] = query
+        querycount += result_querycount
 
-    #['', '$x0; $x0;', '$x0; $x0; $x0;', '$x0; $x0; $x1; $x1;', '$x0; $x1; $x0; $x1;', '$x0; $x1; $x1; $x0;']
-    #['', 'aa;']
-
-    #     return {
-    #     'stack': stack,
-    #     'querycount': querycount,
-    #     'matching_dict': matching_dict,
-    #     'non_matching_dict': non_matching_dict,
-    #     'non_descriptive': non_descriptive,
-    #     'query_tree': query_tree,
-    #     'parent_dict': parent_dict,
-    #     'dict_iter': dict_iter,
-    #     'dictionary': dictionary,
-    # }
-
-            
     result_dict = {}
     if find_descriptive_only:
         queryset, query_tree = ht_descriptive_queries(query_tree, set(matching_dict.keys()))
@@ -153,7 +135,7 @@ def discover_duc_smartest(sample, supp, max_query_length, only_types=False, find
     else:
         result_dict['queryset'] = set(matching_dict.keys()) - {gen_event} - {''}
 
-    result_dict['querycount'] = sum([result['querycount'] for result in results])
+    result_dict['querycount'] = querycount
     result_dict['parent_dict'] = parent_dict
     result_dict['matching_dict'] = matching_dict
     result_dict['dict_iter'] = dict_iter
