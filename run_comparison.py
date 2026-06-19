@@ -12,12 +12,15 @@ import os
 import sys
 import time
 import ray
+import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from generator_multidim import MultidimSampleGenerator
 from duc import discover_duc
 from duc_smartest import discover_duc_smartest
+from duc_distributed_matching import discover_duc_distributed_matching
+
 
 from dus import discover_dus
 from dus_smartest import discover_dus_smartest
@@ -29,6 +32,7 @@ from bss import discover_bss
 ALGORITHMS = [
     ('D-U-C', discover_duc),
     ('D-U-C-S', discover_duc_smartest),
+    ('D-U-C-M', discover_duc_distributed_matching),
 
     ('D-U-S', discover_dus),
     ('D-U-S-S', discover_dus_smartest),

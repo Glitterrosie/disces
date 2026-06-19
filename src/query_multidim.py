@@ -358,6 +358,91 @@ class MultidimQuery(Query):
                 #     dict_iter[querystring][trace_index]= value
                 
                 return True
+            
+    def match_sample_distributed(self, sample, supp, complete_test=False, dict_iter = None,
+                     patternset = None, parent_dict = None, max_query_length = -1, chunk_id = None):
+        """
+            Checks whether the query matches a given sample with given support.
+
+            Determines and sets the support of the query regarding the sample
+            if a full test is performed. Stores indices of tested traces
+            depending on the match test result in _query_matched_traces or
+            _query_not_matched_traces.
+
+            Args:
+                sample: Sample instance.
+
+                supp: Float between 0 and 1 which describes the requested
+                    support.
+
+                complete_test: Boolean which indicates whether all traces
+                    should be tested or not. In the latter case the loop over
+                    traces will stop if either the support is fulfilled or can
+                    not be fulfilled anymore.
+                
+                dict_iter= dict_iter (dictionary): nested dictionary for each query and trace 
+                the last matching position is value. Default None
+
+                patternset: set of types occurring twice in at least one trace. Default None
+
+                parent_dict: Dictionary containing parent query to each querystring. Default None
+
+            Returns:
+                True iff the query matches the given sample with given supp.
+
+            Raises:
+                EmptySampleError: The given sample is empty.
+                InvalidQuerySupportError: Supp is <0 or >1.
+        """
+        if self._query_matchtest == 'regex':
+            return Query.match_sample(self, sample=sample, supp=supp, complete_test=complete_test)
+        
+        if self._query_matchtest == 'smarter':
+            sample_size = sample._sample_size
+            querystring = self._query_string
+            if max_query_length != -1 and self._query_string_length > max_query_length:
+                return False
+            
+            if self._query_matched_traces:
+                trace_list = self._query_matched_traces
+                for trace in trace_list:
+                    if trace < sample_size:
+                        if not sample._sample[trace]:
+                            self._query_matched_traces.remove(trace)
+                            if querystring.count('$')!=0 and dict_iter:
+                                dict_iter[querystring][trace]= -1
+                            elif dict_iter:
+                                dict_iter[querystring].pop(trace)
+                if len(self._query_matched_traces)/sample_size >= supp:
+                    return True
+                elif len(self._query_matched_traces) + sample_size - trace_list[-1] < ceil(supp*sample_size):
+                    return False
+
+            matching = self._matching_smarter_multidim(sample=sample, supp =supp, dict_iter=dict_iter,
+                                                           patternset=patternset,  parent_dict=parent_dict)
+            if querystring.count('$')!=0:
+                matchingcount= len(matching)
+                self._query_matched_traces = list(matching.keys())
+            else:
+                matchingcount=0
+                matched_traces = []
+                for key, value in matching.items():
+                    if value != -1:
+                        matched_traces.append(key)
+                        matchingcount +=1
+                self._query_matched_traces = matched_traces
+            
+            if matching:
+                dict_iter[querystring] = matching
+            matchsupport= matchingcount/sample_size
+            if matchsupport < supp:
+                return False, dict_iter, chunk_id, parent_dict, self._query_matched_traces
+            else:
+                # for trace_index, value in matching.items():
+                #     if querystring not in dict_iter:
+                #         dict_iter[querystring]= {}
+                #     dict_iter[querystring][trace_index]= value
+                return True, dict_iter, chunk_id, parent_dict, self._query_matched_traces
 
     def match_trace_regex(self, trace:str, regex:Pattern) -> Match[str]|None:
         """
