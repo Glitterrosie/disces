@@ -20,6 +20,8 @@ from duc import discover_duc
 from duc_smartest import discover_duc_smartest
 
 from dus import discover_dus
+from dus_smartest import discover_dus_smartest
+
 from bsc import discover_bsc
 from bss import discover_bss
 
@@ -29,6 +31,8 @@ ALGORITHMS = [
     ('D-U-C-S', discover_duc_smartest),
 
     ('D-U-S', discover_dus),
+    ('D-U-S-S', discover_dus_smartest),
+
     ('B-S-C', discover_bsc),
     ('B-S-S', discover_bss),
 ]
