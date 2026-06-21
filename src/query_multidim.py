@@ -401,8 +401,8 @@ class MultidimQuery(Query):
             sample_size = sample._sample_size
             querystring = self._query_string
             if max_query_length != -1 and self._query_string_length > max_query_length:
-                return False
-            
+                return False, dict_iter, chunk_id, parent_dict, self._query_matched_traces
+
             if self._query_matched_traces:
                 trace_list = self._query_matched_traces
                 for trace in trace_list:
@@ -414,9 +414,9 @@ class MultidimQuery(Query):
                             elif dict_iter:
                                 dict_iter[querystring].pop(trace)
                 if len(self._query_matched_traces)/sample_size >= supp:
-                    return True
+                    return True, dict_iter, chunk_id, parent_dict, self._query_matched_traces
                 elif len(self._query_matched_traces) + sample_size - trace_list[-1] < ceil(supp*sample_size):
-                    return False
+                    return False, dict_iter, chunk_id, parent_dict, self._query_matched_traces
 
             matching = self._matching_smarter_multidim(sample=sample, supp =supp, dict_iter=dict_iter,
                                                            patternset=patternset,  parent_dict=parent_dict)
@@ -431,17 +431,13 @@ class MultidimQuery(Query):
                         matched_traces.append(key)
                         matchingcount +=1
                 self._query_matched_traces = matched_traces
-            
+
             if matching:
                 dict_iter[querystring] = matching
             matchsupport= matchingcount/sample_size
             if matchsupport < supp:
                 return False, dict_iter, chunk_id, parent_dict, self._query_matched_traces
             else:
-                # for trace_index, value in matching.items():
-                #     if querystring not in dict_iter:
-                #         dict_iter[querystring]= {}
-                #     dict_iter[querystring][trace_index]= value
                 return True, dict_iter, chunk_id, parent_dict, self._query_matched_traces
 
     def match_trace_regex(self, trace:str, regex:Pattern) -> Match[str]|None:

@@ -1,10 +1,9 @@
 #!/usr/bin/python3
-"""D-U-C: Domain Unified Constant discovery algorithm."""
+"""D-U-C-M: Domain Unified Constant — distributed matching via Ray."""
 import logging
 import time
 from collections import deque
 from sample_multidim import MultidimSample
-from sample import Sample
 from math import ceil
 import ray
 
@@ -29,7 +28,11 @@ LOGGER.addHandler(FILE_HANDLER)
 def discover_duc_distributed_matching(sample, supp: float, max_query_length: int = -1,
                                       only_types: bool = False, find_descriptive_only: bool = True,
                                       all_patternset=None) -> dict:
-    """D-U-C-M: distributed matching version of D-U-C.
+    """D-U-C with matching distributed across Ray workers.
+
+    The sample is split into chunks; each chunk tests a query independently
+    and returns its match result plus updated dict_iter. The driver combines
+    results and continues the BFS.
 
     Args:
         sample: MultidimSample instance.
@@ -101,12 +104,24 @@ def discover_duc_distributed_matching(sample, supp: float, max_query_length: int
     matching_dict = {gen_event: query}
     non_matching_dict = {}
     parent_dict = {gen_event: query}
-    #dict_iter = {}
-    dictionary = {}
     querycount = 1
 
     children = _next_queries_multidim(query, alphabet, max_query_length, patternset)
     parent_dict.update({child._query_string: query for child in children})
+
+    # all_patternset uses global trace IDs; each chunk re-indexes traces from 0,
+    # so we build a per-chunk patternset remapped to local IDs.
+    chunk_offsets = {}
+    chunk_patternsets = {}
+    offset = 0
+    for chunk_id, (chunk, _) in chunks_dict.items():
+        chunk_offsets[chunk_id] = offset
+        chunk_patternsets[chunk_id] = {
+            domain: {local_t: all_patternset[domain][local_t + offset]
+                     for local_t in range(chunk._sample_size)}
+            for domain in all_patternset
+        }
+        offset += chunk._sample_size
 
     stack = deque(children)
     query_tree = HyperLinkedTree(
@@ -131,27 +146,20 @@ def discover_duc_distributed_matching(sample, supp: float, max_query_length: int
             )
             last_print_time = current_time
 
-        parent = parent_dict[querystring]
-        parentstring = parent._query_string
-        # dict iter updates need to be passed back
-        # patternset could be minimized
-        # decide which traces get in which distribution
-
         futures = [distributed_matching.remote(sample=value[0], query=query, supp=supp, dict_iter=value[1],
-                                               all_patternset=all_patternset, parent_dict=parent_dict, chunk_id=key)
+                                               all_patternset=chunk_patternsets[key], parent_dict=parent_dict, chunk_id=key)
                                                for key, value in chunks_dict.items()]
-        
-        # combine the matching result and update each chunk's dict_iter
-        results = [ray.get(future) for future in futures]
-        for _, new_dict_iter, chunk_id, updated_parent_dict, query_matched_traces in results:
+
+        results = ray.get(futures)
+        query._query_matched_traces = []
+        for _, new_dict_iter, chunk_id, updated_parent_dict, chunk_matched_traces in results:
             chunks_dict[chunk_id][1] = new_dict_iter
             parent_dict.update(updated_parent_dict)
-            query._
+            query._query_matched_traces.extend(
+                t + chunk_offsets[chunk_id] for t in chunk_matched_traces
+            )
 
-        matching = all(m for m, _, _, _ in results)
-
-
-        dictionary[querystring] = matching
+        matching = all(m for m, _, _, _, _ in results)
 
         if not matching:
             non_matching_dict[querystring] = query
@@ -192,14 +200,14 @@ def discover_duc_distributed_matching(sample, supp: float, max_query_length: int
 
     return result_dict
 
+
 @ray.remote
 def distributed_matching(sample, query, supp, dict_iter, all_patternset, parent_dict, chunk_id):
-
     return query.match_sample_distributed(
-            sample=sample, supp=supp, dict_iter=dict_iter,
-            patternset=all_patternset, parent_dict=parent_dict, 
-            chunk_id=chunk_id
-        )
+        sample=sample, supp=supp, dict_iter=dict_iter,
+        patternset=all_patternset, parent_dict=parent_dict,
+        chunk_id=chunk_id,
+    )
 
 
 def rebuild_sample_from_array(original_sample) -> MultidimSample:
