@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""D-U-C-M: Domain Unified Constant — distributed matching via Ray."""
+"""D-U-C-M: Domain Unified Constant — distributed matching via Ray Actors."""
 import logging
 import time
 from collections import deque
@@ -25,14 +25,43 @@ FILE_HANDLER.setFormatter(FORMATTER)
 LOGGER.addHandler(FILE_HANDLER)
 
 
+@ray.remote
+class ChunkWorker:
+    """Persistent Ray Actor that owns one chunk of the sample.
+
+    The chunk, patternset, dict_iter, and parent_dict live here permanently.
+    Only the query object crosses the wire per BFS step.
+    """
+
+    def __init__(self, chunk, patternset, chunk_id, supp):
+        self.chunk = chunk
+        self.patternset = patternset
+        self.chunk_id = chunk_id
+        self.supp = supp
+        self.dict_iter = {}
+        self.parent_dict = {}
+
+    def match(self, query):
+        result = query.match_sample_distributed(
+            sample=self.chunk,
+            supp=self.supp,
+            dict_iter=self.dict_iter,
+            patternset=self.patternset,
+            parent_dict=self.parent_dict,
+            chunk_id=self.chunk_id,
+        )
+        matched, self.dict_iter, _, new_parent_dict, matched_traces = result
+        self.parent_dict.update(new_parent_dict)
+        return matched, matched_traces
+
+
 def discover_duc_distributed_matching(sample, supp: float, max_query_length: int = -1,
                                       only_types: bool = False, find_descriptive_only: bool = True,
                                       all_patternset=None) -> dict:
-    """D-U-C with matching distributed across Ray workers.
+    """D-U-C with matching distributed across persistent Ray Actor workers.
 
-    The sample is split into chunks; each chunk tests a query independently
-    and returns its match result plus updated dict_iter. The driver combines
-    results and continues the BFS.
+    Each worker permanently owns a chunk of the sample and its local dict_iter.
+    Per BFS step only the query is sent; workers return one boolean each.
 
     Args:
         sample: MultidimSample instance.
@@ -49,7 +78,6 @@ def discover_duc_distributed_matching(sample, supp: float, max_query_length: int
     distributions = 4
     chunks = np.array_split(sample._sample, distributions)
     chunks = [rebuild_sample_from_array(chunk) for chunk in chunks]
-    chunks_dict = {i + 1: [chunk, dict()] for i, chunk in enumerate(chunks)}
 
     if max_query_length == -1:
         threshold = ceil(sample._sample_size * supp)
@@ -98,6 +126,22 @@ def discover_duc_distributed_matching(sample, supp: float, max_query_length: int
     sample_sized_support = ceil(sample._sample_size * supp)
     alphabet = sorted({symbol for symbol, value in vsdb.items() if len(value) >= sample_sized_support})
 
+    # Build per-chunk patternsets remapped to local trace IDs, then start
+    # one persistent Actor per chunk. Actors are created once for the whole run.
+    workers = []
+    offset = 0
+    chunk_offsets = []
+    for i, chunk in enumerate(chunks):
+        chunk_id = i + 1
+        chunk_patternset = {
+            domain: {local_t: all_patternset[domain][local_t + offset]
+                     for local_t in range(chunk._sample_size)}
+            for domain in all_patternset
+        }
+        workers.append(ChunkWorker.remote(chunk, chunk_patternset, chunk_id, supp))
+        chunk_offsets.append(offset)
+        offset += chunk._sample_size
+
     query = MultidimQuery()
     query.set_query_string(gen_event)
 
@@ -108,20 +152,6 @@ def discover_duc_distributed_matching(sample, supp: float, max_query_length: int
 
     children = _next_queries_multidim(query, alphabet, max_query_length, patternset)
     parent_dict.update({child._query_string: query for child in children})
-
-    # all_patternset uses global trace IDs; each chunk re-indexes traces from 0,
-    # so we build a per-chunk patternset remapped to local IDs.
-    chunk_offsets = {}
-    chunk_patternsets = {}
-    offset = 0
-    for chunk_id, (chunk, _) in chunks_dict.items():
-        chunk_offsets[chunk_id] = offset
-        chunk_patternsets[chunk_id] = {
-            domain: {local_t: all_patternset[domain][local_t + offset]
-                     for local_t in range(chunk._sample_size)}
-            for domain in all_patternset
-        }
-        offset += chunk._sample_size
 
     stack = deque(children)
     query_tree = HyperLinkedTree(
@@ -146,20 +176,17 @@ def discover_duc_distributed_matching(sample, supp: float, max_query_length: int
             )
             last_print_time = current_time
 
-        futures = [distributed_matching.remote(sample=value[0], query=query, supp=supp, dict_iter=value[1],
-                                               all_patternset=chunk_patternsets[key], parent_dict=parent_dict, chunk_id=key)
-                                               for key, value in chunks_dict.items()]
-
+        # send only the query to each worker; all heavy state stays in the Actor
+        futures = [worker.match.remote(query) for worker in workers]
         results = ray.get(futures)
-        query._query_matched_traces = []
-        for _, new_dict_iter, chunk_id, updated_parent_dict, chunk_matched_traces in results:
-            chunks_dict[chunk_id][1] = new_dict_iter
-            parent_dict.update(updated_parent_dict)
-            query._query_matched_traces.extend(
-                t + chunk_offsets[chunk_id] for t in chunk_matched_traces
-            )
 
-        matching = all(m for m, _, _, _, _ in results)
+        # rebuild global matched_traces from chunk-local indices
+        query._query_matched_traces = []
+        matching = True
+        for (matched, chunk_matched_traces), off in zip(results, chunk_offsets):
+            if not matched:
+                matching = False
+            query._query_matched_traces.extend(t + off for t in chunk_matched_traces)
 
         if not matching:
             non_matching_dict[querystring] = query
@@ -199,15 +226,6 @@ def discover_duc_distributed_matching(sample, supp: float, max_query_length: int
     result_dict['patternset'] = patternset
 
     return result_dict
-
-
-@ray.remote
-def distributed_matching(sample, query, supp, dict_iter, all_patternset, parent_dict, chunk_id):
-    return query.match_sample_distributed(
-        sample=sample, supp=supp, dict_iter=dict_iter,
-        patternset=all_patternset, parent_dict=parent_dict,
-        chunk_id=chunk_id,
-    )
 
 
 def rebuild_sample_from_array(original_sample) -> MultidimSample:
