@@ -36,9 +36,6 @@ ALGORITHMS = [
 
     ('D-U-S', discover_dus),
     ('D-U-S-D', discover_dus_dimension),
-
-    ('B-S-C', discover_bsc),
-    ('B-S-S', discover_bss),
 ]
 
 ray.init(runtime_env={"env_vars": {"PYTHONPATH": os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src')}}, ignore_reinit_error=True)
@@ -125,9 +122,6 @@ def main():
         max_query_length=args.max_query_length,
     )
 
-    # print sample traces for reference
-    for trace in sample._sample:
-        print(trace)
     print_table(results, args.sample_size, args.trace_length, args.dimensions, args.support)
     save_csv(results, args.output, args.sample_size, args.trace_length, args.dimensions, args.support)
 
