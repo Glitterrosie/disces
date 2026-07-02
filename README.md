@@ -1,76 +1,29 @@
-# DISCES: Systematic Discovery of Event Stream Queries
-
-We propose four algorithms for the discovery of event stream queries given a stream database.
-
-A detailed description of the algorithms can be found in the [DISCES technical report](./disces-technical-report.pdf).
-
----
-
-## Reproducing the Experiments
-
-The experiments from the paper can be reproduced using the scripts in the `experiments` directory.  
-Intermediate results will be stored in the directory `experiment_results`.  
-The final PDF report will be written to the repository root as **`main.pdf`**.
-
-### 1. Clone the repository
+# DISCES
+## Setup
+1. Create the python environment: 
+```bash
+python3 -m venv venv && source venv/bin/activate
 ```
-git clone https://github.com/rebesatt/disces.git
-cd disces
+2. Install the dependencies:
+```bash
+pip install -r requirements.txt
 ```
-
-### 2. Requirements
-
-The script requires Python 3 and the following Python packages:
-
-- requests  
-- pandas  
-- msgpack  
-- numpy  
-- matplotlib  
-- seaborn  
-- func_timeout  
-- jinja2  
-- typing_extensions  
-
-Missing packages can be installed via:
+3. The code can then be run via the terminal:
+```bash
+python run_comparison.py --sample-size 5000 --trace-length 10 --dimensions 2 --type-count 5
 ```
-python -m pip install -r requirements.txt
-```
+- `--sample_size` = number of traces
+- `--trace-length` = length of traces with `min=max`
+- `--dimensions` = number of different attributes
+- `--type-count` = number of possible values per attribute
 
-In addition, a working **LaTeX installation** is required to generate the final PDF (`main.pdf`).
+## Algorithms
+We distributed the basic DUC and DUS Algorithm in 3 different Versions:
+### DUCT (DUC-Tree)
+We distribute the search across this first level, assigning each branch to a separate worker to be explored independently, and combine the results at the end.
 
-### 3. Run the experiments
+### DUCM (DUC-Matching)
+We partition the traces across workers, so that each worker performs the match operation on its own subset of streams.
 
-#### Quick run (several hours)
-Runs all algorithms **except IL-Miner**.  
-This mode is recommended for most users, as it typically finishes within a few hours.
-```
-python reproduce_paper.py
-```
-
-#### Full run (several days)
-Runs the **complete experiment including IL-Miner**.  
-⚠️ This mode can take **multiple days** to finish, depending on your hardware.
-```
-python reproduce_paper.py -ilm
-```
-
-### 4. Results
-
-At the end of either run, the script generates:
-
-- Intermediate data in `experiment_results/`  
-- A final PDF report in the repository root:
-
-  ```
-  main.pdf
-  ```
-
-This report reproduces the figures and tables from the article and can be compared directly to the original.
-
-### 5. Options
-
-To see all available options, run:
-```
-python reproduce_paper.py -h
-```
+### DUSD (DUS-Dimension)
+We distribute the per-attribute trees across workers so they are explored in parallel, then perform the merging sequentially once all trees are complete.
