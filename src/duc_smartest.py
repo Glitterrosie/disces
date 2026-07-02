@@ -26,7 +26,7 @@ FILE_HANDLER.setFormatter(FORMATTER)
 LOGGER.addHandler(FILE_HANDLER)
 
 
-def discover_duc_smartest(sample, supp, max_query_length, only_types=False, find_descriptive_only=True, all_patternset = None) -> dict:
+def discover_duc_tree(sample, supp, max_query_length, only_types=False, find_descriptive_only=True, all_patternset = None) -> dict:
     """Query Discovery by using unified bottom up depth-first search with smarter matching.
 
     Args:

@@ -55,7 +55,7 @@ class ChunkWorker:
         return matched, matched_traces
 
 
-def discover_duc_distributed_matching(sample, supp: float, max_query_length: int = -1,
+def discover_ducm(sample, supp: float, max_query_length: int = -1,
                                       only_types: bool = False, find_descriptive_only: bool = True,
                                       all_patternset=None) -> dict:
     """D-U-C with matching distributed across persistent Ray Actor workers.

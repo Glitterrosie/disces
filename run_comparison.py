@@ -18,12 +18,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from generator_multidim import MultidimSampleGenerator
 from duc import discover_duc
-from duc_smartest import discover_duc_smartest
-from duc_distributed_matching import discover_duc_distributed_matching
+from duct import discover_duc_tree
+from ducm import discover_ducm
 
 
 from dus import discover_dus
-from dus_smartest import discover_dus_smartest
+from dusd import discover_dus_dimension
 
 from bsc import discover_bsc
 from bss import discover_bss
@@ -31,11 +31,11 @@ from bss import discover_bss
 
 ALGORITHMS = [
     ('D-U-C', discover_duc),
-    ('D-U-C-S', discover_duc_smartest),
-    ('D-U-C-M', discover_duc_distributed_matching),
+    ('D-U-C-T', discover_duc_tree),
+    ('D-U-C-M', discover_ducm),
 
     ('D-U-S', discover_dus),
-    ('D-U-S-S', discover_dus_smartest),
+    ('D-U-S-D', discover_dus_dimension),
 
     ('B-S-C', discover_bsc),
     ('B-S-S', discover_bss),

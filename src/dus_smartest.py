@@ -27,7 +27,7 @@ def _per_domain_duc(domain_sample, supp, max_query_length, domain_patternset):
     )
 
 
-def discover_dus_smartest(sample, supp: float, max_query_length: int = -1) -> dict:
+def discover_dus_dimension(sample, supp: float, max_query_length: int = -1) -> dict:
     """D-U-S: per-domain D-U-C in parallel via Ray, then merge across domains.
 
     Args:
