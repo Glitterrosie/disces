@@ -7,8 +7,6 @@ from sample_multidim import MultidimSample
 from math import ceil
 import ray
 
-import numpy as np
-
 from query_multidim import MultidimQuery
 from hyper_linked_tree import HyperLinkedTree
 from discovery_shared import (
@@ -57,7 +55,7 @@ class ChunkWorker:
 
 def discover_ducm(sample, supp: float, max_query_length: int = -1,
                                       only_types: bool = False, find_descriptive_only: bool = True,
-                                      all_patternset=None) -> dict:
+                                      all_patternset=None, partition_fn=None) -> dict:
     """D-U-C with matching distributed across persistent Ray Actor workers.
 
     Each worker permanently owns a chunk of the sample and its local dict_iter.
@@ -70,14 +68,21 @@ def discover_ducm(sample, supp: float, max_query_length: int = -1,
         only_types: If True, skip variable introduction.
         find_descriptive_only: If True, return only descriptive queries.
         all_patternset: Pre-computed patternset (per-domain per-trace).
+        partition_fn: Callable(sample, distributions) -> list of trace-id lists,
+            one per worker. Defaults to partition_traces_by_length.
 
     Returns:
         Result dict with keys: queryset, querycount, matching_dict,
         non_matching_dict, dict_iter, query_tree, parent_dict, patternset.
     """
+    if partition_fn is None:
+        partition_fn = partition_traces_by_length
     distributions = 4
-    chunks = np.array_split(sample._sample, distributions)
-    chunks = [rebuild_sample_from_array(chunk) for chunk in chunks]
+    chunk_id_maps = partition_fn(sample, distributions)
+    chunks = [
+        rebuild_sample_from_array([sample._sample[trace_id] for trace_id in id_map])
+        for id_map in chunk_id_maps
+    ]
 
     if max_query_length == -1:
         threshold = ceil(sample._sample_size * supp)
@@ -129,18 +134,14 @@ def discover_ducm(sample, supp: float, max_query_length: int = -1,
     # Build per-chunk patternsets remapped to local trace IDs, then start
     # one persistent Actor per chunk. Actors are created once for the whole run.
     workers = []
-    offset = 0
-    chunk_offsets = []
-    for i, chunk in enumerate(chunks):
+    for i, (chunk, id_map) in enumerate(zip(chunks, chunk_id_maps)):
         chunk_id = i + 1
         chunk_patternset = {
-            domain: {local_t: all_patternset[domain][local_t + offset]
+            domain: {local_t: all_patternset[domain][id_map[local_t]]
                      for local_t in range(chunk._sample_size)}
             for domain in all_patternset
         }
         workers.append(ChunkWorker.remote(chunk, chunk_patternset, chunk_id, supp))
-        chunk_offsets.append(offset)
-        offset += chunk._sample_size
 
     query = MultidimQuery()
     query.set_query_string(gen_event)
@@ -178,7 +179,7 @@ def discover_ducm(sample, supp: float, max_query_length: int = -1,
 
         # send only the query to each worker; all heavy state stays in the Actor
         futures = [worker.match.remote(query) for worker in workers]
-        future_to_offset = {f: off for f, off in zip(futures, chunk_offsets)}
+        future_to_id_map = dict(zip(futures, chunk_id_maps))
 
         # collect results as they arrive; stop as soon as one reports non-matching
         remaining = list(futures)
@@ -191,8 +192,8 @@ def discover_ducm(sample, supp: float, max_query_length: int = -1,
             if not matched:
                 matching = False
                 break  # one non-match is enough; remaining actors finish in background
-            off = future_to_offset[ready[0]]
-            query._query_matched_traces.extend(t + off for t in chunk_matched_traces)
+            id_map = future_to_id_map[ready[0]]
+            query._query_matched_traces.extend(id_map[t] for t in chunk_matched_traces)
 
         if not matching:
             non_matching_dict[querystring] = query
@@ -239,3 +240,54 @@ def rebuild_sample_from_array(original_sample) -> MultidimSample:
     sample.set_sample(list(original_sample))
     sample.calc_sample_typeset(calculate_all=True)
     return sample
+
+
+def partition_traces_naive(sample, distributions):
+    """Split trace ids into `distributions` contiguous chunks, in sample order.
+
+    Matches the original np.array_split behaviour: sizes differ by at most
+    one, with the first `sample_size % distributions` chunks getting the
+    extra trace. No balancing or reordering by length.
+
+    Returns:
+        List of `distributions` lists of original trace ids.
+    """
+    sample_size = sample._sample_size
+    base, remainder = divmod(sample_size, distributions)
+
+    chunk_id_maps = []
+    start = 0
+    for i in range(distributions):
+        size = base + (1 if i < remainder else 0)
+        chunk_id_maps.append(list(range(start, start + size)))
+        start += size
+
+    return chunk_id_maps
+
+
+def partition_traces_by_length(sample, distributions):
+    """Split trace ids into `distributions` chunks balanced by total trace length.
+
+    Uses greedy LPT (longest-processing-time-first): traces are assigned,
+    longest first, to whichever chunk currently has the smallest total
+    length, which keeps the workers' total workload close to even. Each
+    chunk is then reordered ascending by trace length, so a worker starts
+    with its shortest trace and matches faster traces first.
+
+    Returns:
+        List of `distributions` lists of original trace ids.
+    """
+    lengths = [len(trace.split()) for trace in sample._sample]
+    order = sorted(range(len(lengths)), key=lambda trace_id: lengths[trace_id], reverse=True)
+
+    chunk_id_maps = [[] for _ in range(distributions)]
+    chunk_loads = [0] * distributions
+    for trace_id in order:
+        worker = min(range(distributions), key=lambda w: chunk_loads[w])
+        chunk_id_maps[worker].append(trace_id)
+        chunk_loads[worker] += lengths[trace_id]
+
+    for id_map in chunk_id_maps:
+        id_map.sort(key=lambda trace_id: lengths[trace_id])
+
+    return chunk_id_maps
