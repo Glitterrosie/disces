@@ -27,6 +27,7 @@ from ducm import discover_ducm, partition_traces_naive, partition_traces_by_leng
 
 from dus import discover_dus
 from dusd import discover_dus_dimension
+from dusm import discover_dusm
 
 from bsc import discover_bsc
 from bss import discover_bss
@@ -40,6 +41,7 @@ ALGORITHMS = [
 
     ('D-U-S', discover_dus),
     ('D-U-S-D', discover_dus_dimension),
+    ('D-U-S-M', discover_dusm),
 ]
 
 ray.init(runtime_env={"env_vars": {"PYTHONPATH": os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src')}}, ignore_reinit_error=True)

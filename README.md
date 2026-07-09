@@ -20,7 +20,7 @@ python run_comparison.py --sample-size 5000 --min-trace-length 10 --max-trace-le
 - `--type-count` = number of possible values per attribute
 
 ## Algorithms
-We distributed the basic DUC and DUS Algorithm in 3 different Versions:
+We distributed the basic DUC and DUS Algorithm in 4 different Versions:
 
 ### DUCT (DUC-Tree)
 We distribute the search across this first level, assigning each branch to a separate worker to be explored independently, and combine the results at the end.
@@ -30,3 +30,6 @@ We partition the traces across workers, so that each worker performs the match o
 
 ### DUSD (DUS-Dimension)
 We distribute the per-attribute trees across workers so they are explored in parallel, then perform the merging sequentially once all trees are complete.
+
+### DUSM (DUS-Matching)
+We explore the per-attribute trees in sequence with DUCM in each tree, then we partition the traces across workers, so that each worker performs the match operation during the merging on its own subset of streams.
