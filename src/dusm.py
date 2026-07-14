@@ -390,7 +390,7 @@ def _domain_separated_discovery_distributed(sample, supp, matchtest, max_query_l
                     query=child_vertex.query, search_for_parents=False)
 
     t_discovery_end = time.perf_counter()             # <-- END phase 1
-    print(f"Per-domain discovery took {t_discovery_end - t_discovery_start:.4f}s")
+    #print(f"Per-domain discovery took {t_discovery_end - t_discovery_start:.4f}s")
 
     descriptive_query_list = set()
     seen = set()
@@ -515,7 +515,7 @@ def _domain_separated_discovery_distributed(sample, supp, matchtest, max_query_l
     _shutdown_workers(merge_workers)
 
     t_merge_end = time.perf_counter()  # <-- END phase 2
-    print(f"Merging phase took {t_merge_end - t_merge_start:.4f}s")
+    #print(f"Merging phase took {t_merge_end - t_merge_start:.4f}s")
 
     result_dict = {}
     result_dict['queryset'], mixed_query_tree = ht_descriptive_queries(mixed_query_tree, descriptive_query_list)
