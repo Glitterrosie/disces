@@ -13,6 +13,7 @@ from discovery_shared import (
     _next_queries_multidim,
     ht_descriptive_queries,
 )
+from profiling_helpers import DriverProfiler, WorkerProfiler, log_profiling_summary
 
 LOG_FORMAT = '| %(message)s'
 LOGGER = logging.getLogger(__name__)
@@ -31,31 +32,39 @@ class ChunkWorker:
     Only the query object crosses the wire per BFS step.
     """
 
-    def __init__(self, chunk, patternset, chunk_id, supp):
+    def __init__(self, chunk, patternset, chunk_id, supp, profile: bool = False):
         self.chunk = chunk
         self.patternset = patternset
         self.chunk_id = chunk_id
         self.supp = supp
         self.dict_iter = {}
         self.parent_dict = {}
+        self._profiler = WorkerProfiler(profile)
 
     def match(self, query):
-        result = query.match_sample_distributed(
-            sample=self.chunk,
-            supp=self.supp,
-            dict_iter=self.dict_iter,
-            patternset=self.patternset,
-            parent_dict=self.parent_dict,
-            chunk_id=self.chunk_id,
-        )
-        matched, self.dict_iter, _, new_parent_dict, matched_traces = result
-        self.parent_dict.update(new_parent_dict)
-        return matched, matched_traces
+        def _do_match():
+            result = query.match_sample_distributed(
+                sample=self.chunk,
+                supp=self.supp,
+                dict_iter=self.dict_iter,
+                patternset=self.patternset,
+                parent_dict=self.parent_dict,
+                chunk_id=self.chunk_id,
+            )
+            matched, self.dict_iter, _, new_parent_dict, matched_traces = result
+            self.parent_dict.update(new_parent_dict)
+            return matched, matched_traces
+
+        return self._profiler.record(_do_match)
+
+    def get_profile_stats(self):
+        """Return timing summary + a pstats text dump for this actor's chunk."""
+        return self._profiler.stats(self.chunk_id, self.chunk._sample_size)
 
 
 def discover_ducm(sample, supp: float, max_query_length: int = -1,
                                       only_types: bool = False, find_descriptive_only: bool = True,
-                                      all_patternset=None, partition_fn=None) -> dict:
+                                      all_patternset=None, partition_fn=None, profile: bool = False) -> dict:
     """D-U-C with matching distributed across persistent Ray Actor workers.
 
     Each worker permanently owns a chunk of the sample and its local dict_iter.
@@ -70,11 +79,19 @@ def discover_ducm(sample, supp: float, max_query_length: int = -1,
         all_patternset: Pre-computed patternset (per-domain per-trace).
         partition_fn: Callable(sample, distributions) -> list of trace-id lists,
             one per worker. Defaults to partition_traces_by_length.
+        profile: If True, collect timing/profiling data for the driver loop
+            and every ChunkWorker actor, and attach it to the result dict
+            under the 'profiling' key. Adds a small overhead per call, so
+            leave this False for normal runs.
 
     Returns:
         Result dict with keys: queryset, querycount, matching_dict,
         non_matching_dict, dict_iter, query_tree, parent_dict, patternset.
+        When profile=True, also includes a 'profiling' key.
     """
+    dp = DriverProfiler(enabled=profile)
+    dp.start(logger=LOGGER)
+
     if partition_fn is None:
         partition_fn = partition_traces_by_length
     distributions = 4
@@ -141,7 +158,7 @@ def discover_ducm(sample, supp: float, max_query_length: int = -1,
                      for local_t in range(chunk._sample_size)}
             for domain in all_patternset
         }
-        workers.append(ChunkWorker.remote(chunk, chunk_patternset, chunk_id, supp))
+        workers.append(ChunkWorker.remote(chunk, chunk_patternset, chunk_id, supp, profile))
 
     query = MultidimQuery()
     query.set_query_string(gen_event)
@@ -178,7 +195,8 @@ def discover_ducm(sample, supp: float, max_query_length: int = -1,
             last_print_time = current_time
 
         # send only the query to each worker; all heavy state stays in the Actor
-        futures = [worker.match.remote(query) for worker in workers]
+        with dp.time_dispatch():
+            futures = [worker.match.remote(query) for worker in workers]
         future_to_id_map = dict(zip(futures, chunk_id_maps))
 
         # collect results as they arrive; stop as soon as one reports non-matching
@@ -186,14 +204,16 @@ def discover_ducm(sample, supp: float, max_query_length: int = -1,
         query._query_matched_traces = []
         matching = True
 
-        while remaining:
-            ready, remaining = ray.wait(remaining, num_returns=1)
-            matched, chunk_matched_traces = ray.get(ready[0])
-            if not matched:
-                matching = False
-                break  # one non-match is enough; remaining actors finish in background
-            id_map = future_to_id_map[ready[0]]
-            query._query_matched_traces.extend(id_map[t] for t in chunk_matched_traces)
+        with dp.time_collection():
+            while remaining:
+                ready, remaining = ray.wait(remaining, num_returns=1)
+                matched, chunk_matched_traces = ray.get(ready[0])
+                if not matched:
+                    matching = False
+                    dp.record_early_stop()
+                    break  # one non-match is enough; remaining actors finish in background
+                id_map = future_to_id_map[ready[0]]
+                query._query_matched_traces.extend(id_map[t] for t in chunk_matched_traces)
 
         if not matching:
             non_matching_dict[querystring] = query
@@ -217,6 +237,9 @@ def discover_ducm(sample, supp: float, max_query_length: int = -1,
                 stack.extend(children)
                 parent_dict.update({child._query_string: query for child in children})
 
+    # gather per-worker profiling stats before anything shuts the actors down
+    worker_stats = ray.get([w.get_profile_stats.remote() for w in workers]) if profile else None
+
     result_dict = {}
     if find_descriptive_only:
         queryset, query_tree = ht_descriptive_queries(query_tree, set(matching_dict.keys()))
@@ -231,6 +254,13 @@ def discover_ducm(sample, supp: float, max_query_length: int = -1,
     result_dict['query_tree'] = query_tree
     result_dict['non_matching_dict'] = non_matching_dict
     result_dict['patternset'] = patternset
+
+    if profile:
+        dp.stop()
+        timeline_path = dp.write_ray_timeline('ducm_ray_timeline.json', logger=LOGGER)
+        profiling = dp.build_summary(querycount, worker_stats, timeline_path)
+        result_dict['profiling'] = profiling
+        log_profiling_summary(LOGGER, profiling, label='D-U-C-M profiling')
 
     return result_dict
 

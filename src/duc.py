@@ -13,6 +13,7 @@ from discovery_shared import (
     _next_queries_multidim,
     ht_descriptive_queries,
 )
+from profiling_helpers import DriverProfiler, log_profiling_summary
 
 LOG_FORMAT = '| %(message)s'
 LOGGER = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ LOGGER.addHandler(FILE_HANDLER)
 
 def discover_duc(sample, supp: float, max_query_length: int = -1,
                  only_types: bool = False, find_descriptive_only: bool = True,
-                 all_patternset=None) -> dict:
+                 all_patternset=None, profile: bool = False) -> dict:
     """D-U-C: unified bottom-up BFS over the full multidimensional alphabet.
 
     Args:
@@ -35,11 +36,21 @@ def discover_duc(sample, supp: float, max_query_length: int = -1,
         only_types: If True, skip variable introduction.
         find_descriptive_only: If True, return only descriptive queries.
         all_patternset: Pre-computed patternset (per-domain per-trace).
+        profile: If True, wrap the whole run in cProfile and time every
+            match_sample call individually, attaching a 'profiling' key to
+            the result dict. There's no distributed dispatch here, so the
+            "collection" timer below just means "time spent inside
+            match_sample"; the report format is shared with the Ray-based
+            algorithms for consistency.
 
     Returns:
         Result dict with keys: queryset, querycount, matching_dict,
         non_matching_dict, dict_iter, query_tree, parent_dict, patternset.
+        When profile=True, also includes a 'profiling' key.
     """
+    dp = DriverProfiler(enabled=profile)
+    dp.start(logger=LOGGER)
+
     if max_query_length == -1:
         threshold = ceil(sample._sample_size * supp)
         trace_length = sorted([len(trace.split()) for trace in sample._sample])
@@ -125,10 +136,13 @@ def discover_duc(sample, supp: float, max_query_length: int = -1,
 
         parent = parent_dict[querystring]
         parentstring = parent._query_string
-        matching = query.match_sample(
-            sample=sample, supp=supp, dict_iter=dict_iter,
-            patternset=all_patternset, parent_dict=parent_dict,
-        )
+        with dp.time_collection():
+            matching = query.match_sample(
+                sample=sample, supp=supp, dict_iter=dict_iter,
+                patternset=all_patternset, parent_dict=parent_dict,
+            )
+        if not matching:
+            dp.record_early_stop()
         dictionary[querystring] = matching
 
         if not matching:
@@ -167,5 +181,11 @@ def discover_duc(sample, supp: float, max_query_length: int = -1,
     result_dict['query_tree'] = query_tree
     result_dict['non_matching_dict'] = non_matching_dict
     result_dict['patternset'] = patternset
+
+    if profile:
+        dp.stop()
+        profiling = dp.build_summary(querycount, worker_stats_list=None)
+        result_dict['profiling'] = profiling
+        log_profiling_summary(LOGGER, profiling, label='D-U-C profiling')
 
     return result_dict

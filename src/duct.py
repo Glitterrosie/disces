@@ -16,6 +16,7 @@ from discovery_shared import (
     _next_queries_multidim,
     ht_descriptive_queries,
 )
+from profiling_helpers import DriverProfiler, WorkerProfiler, log_profiling_summary
 
 LOG_FORMAT = '| %(message)s'
 LOGGER = logging.getLogger(__name__)
@@ -26,16 +27,25 @@ FILE_HANDLER.setFormatter(FORMATTER)
 LOGGER.addHandler(FILE_HANDLER)
 
 
-def discover_duc_tree(sample, supp, max_query_length, only_types=False, find_descriptive_only=True, all_patternset = None) -> dict:
+def discover_duc_tree(sample, supp, max_query_length, only_types=False, find_descriptive_only=True,
+                       all_patternset=None, profile: bool = False) -> dict:
     """Query Discovery by using unified bottom up depth-first search with smarter matching.
 
     Args:
         sample: Sample instance.
         supp: Float between 0 and 1 which describes the requested support.
+        profile: If True, each `_process_query` task profiles its own
+            subtree exploration (real per-process cProfile, since each task
+            runs in its own Ray worker), and the driver times dispatch
+            (spawning the tasks) vs. collection (`ray.get`). Everything is
+            attached to the result dict under 'profiling'.
 
     Returns:
         Set of queries if a query has been discovered, None otherwise.
     """
+    dp = DriverProfiler(enabled=profile)
+    dp.start(logger=LOGGER)
+
     if max_query_length == -1:
         threshold = ceil(sample._sample_size * supp)
         trace_length = sorted([len(trace.split()) for trace in sample._sample])
@@ -112,11 +122,22 @@ def discover_duc_tree(sample, supp, max_query_length, only_types=False, find_des
         stack.append(child)
         thread_collection.append((stack,query_tree,parent_dict))
 
+    with dp.time_dispatch():
+        futures = [
+            _process_query.remote(
+                stack, 1, sample, supp, dict_iter, all_patternset, patternset, matching_dict,
+                non_matching_dict, non_descriptive, query_tree, parent_dict, alphabet,
+                max_query_length, gen_event, dictionary, profile, task_id,
+            )
+            for task_id, (stack, query_tree, parent_dict) in enumerate(thread_collection, start=1)
+        ]
 
-    futures = [_process_query.remote(stack, 1, sample, supp, dict_iter, all_patternset, patternset, matching_dict, non_matching_dict, non_descriptive, query_tree, parent_dict, alphabet, max_query_length, gen_event, dictionary) for stack,query_tree,parent_dict in thread_collection]
-    results = ray.get(futures)
+    with dp.time_collection():
+        results = ray.get(futures)
+
     query_tree = HyperLinkedTree(ceil(supp * sample._sample_size), event_dimension=sample._sample_event_dimension)
     querycount = 0
+    worker_stats = []
     for dict in results:
         result_query_tree = dict['query_tree']
         result_matching_dict = dict['matching_dict']
@@ -126,6 +147,8 @@ def discover_duc_tree(sample, supp, max_query_length, only_types=False, find_des
         for query_string, query in result_matching_dict.items():
             matching_dict[query_string] = query
         querycount += result_querycount
+        if profile:
+            worker_stats.append(dict.get('profiling'))
 
     result_dict = {}
     if find_descriptive_only:
@@ -143,7 +166,12 @@ def discover_duc_tree(sample, supp, max_query_length, only_types=False, find_des
     result_dict['non_matching_dict'] = non_matching_dict
     result_dict['patternset'] = patternset
 
-
+    if profile:
+        dp.stop()
+        timeline_path = dp.write_ray_timeline('duct_ray_timeline.json', logger=LOGGER)
+        profiling = dp.build_summary(querycount, worker_stats, timeline_path)
+        result_dict['profiling'] = profiling
+        log_profiling_summary(LOGGER, profiling, label='D-U-C-tree profiling')
 
     return result_dict
 
@@ -151,7 +179,10 @@ def discover_duc_tree(sample, supp, max_query_length, only_types=False, find_des
 @ray.remote
 def _process_query(stack, querycount, sample, supp, dict_iter, all_patternset, patternset,
                    matching_dict, non_matching_dict, non_descriptive, query_tree, parent_dict, alphabet,
-                   max_query_length, gen_event, dictionary):
+                   max_query_length, gen_event, dictionary, profile: bool = False, task_id: int = 0):
+    worker_profiler = WorkerProfiler(profile)
+    initial_stack_size = len(stack)
+
     while stack:
         query = stack.pop()
         querystring = query._query_string
@@ -160,7 +191,11 @@ def _process_query(stack, querycount, sample, supp, dict_iter, all_patternset, p
         current_time = time.time()
         parent = parent_dict[querystring]
         parentstring = parent._query_string
-        matching = query.match_sample(sample=sample, supp=supp, dict_iter=dict_iter, patternset=all_patternset, parent_dict=parent_dict)
+        matching = worker_profiler.record(
+            query.match_sample,
+            sample=sample, supp=supp, dict_iter=dict_iter,
+            patternset=all_patternset, parent_dict=parent_dict,
+        )
         dictionary.update({querystring: matching})
 
         if not matching:
@@ -182,9 +217,12 @@ def _process_query(stack, querycount, sample, supp, dict_iter, all_patternset, p
                 stack.extend(children)
                 parent_dict.update({child._query_string: query for child in children})
 
-    return {
+    result = {
         'matching_dict': matching_dict,
         'query_tree': query_tree,
         'parent_dict': parent_dict,
         'querycount': querycount,
     }
+    if profile:
+        result['profiling'] = worker_profiler.stats(task_id, initial_stack_size)
+    return result
