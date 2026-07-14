@@ -36,8 +36,8 @@ from bss import discover_bss
 ALGORITHMS = [
     ('D-U-C', discover_duc),
     ('D-U-C-T', discover_duc_tree),
-    ('D-U-C-M-naive', functools.partial(discover_ducm, partition_fn=partition_traces_naive)),
-    ('D-U-C-M-balanced', functools.partial(discover_ducm, partition_fn=partition_traces_by_length)),
+    ('D-U-C-M-r', functools.partial(discover_ducm, partition_fn=partition_traces_naive)),
+    ('D-U-C-M-b', functools.partial(discover_ducm, partition_fn=partition_traces_by_length)),
 
     ('D-U-S', discover_dus),
     ('D-U-S-D', discover_dus_dimension),
